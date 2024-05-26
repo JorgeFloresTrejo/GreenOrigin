@@ -43,7 +43,7 @@ contract GreenOrigin is ERC721, Ownable {
         uint id;
         string coordinates;
         address owner;
-        bool compliant;
+        bool compliance;
         string[] auditHistory;
     }
 
@@ -56,6 +56,7 @@ contract GreenOrigin is ERC721, Ownable {
         string unit;
         State state;
         uint256 parcelId;
+        bool needsProcessing;
     }
 
     // Estructura de datos para personas registradas
@@ -100,6 +101,11 @@ contract GreenOrigin is ERC721, Ownable {
         _;
     }
 
+    modifier onlyProcessor(){
+        require(accounts[msg.sender].role == Role.Processor);
+        _;
+    }
+
     // Función para registrar un usuario
     function registerUser(
         address _userAddress, 
@@ -119,7 +125,8 @@ contract GreenOrigin is ERC721, Ownable {
         uint256 _parcelId,
         uint8 _quantity, 
         string memory _product, 
-        string memory _unit
+        string memory _unit,
+        bool _needsProcessing
     ) external userRegistered {
         if (getUserRole(msg.sender) == Role.Processor) {
             require(attributes[_fromTokenId].state == State.ACCEPTED, "El token debe estar en estado ACCEPTED");
@@ -132,7 +139,7 @@ contract GreenOrigin is ERC721, Ownable {
         require(parcels[_parcelId].id == _parcelId, "Parcela no encontrada");
         // require(parcels[_parcelId].compliant, " Parcela no esta en cumplimiento");
         _safeMint(msg.sender, _toTokenId);
-        attributes[_toTokenId] = Attr(msg.sender, _fromTokenId, _quantity, _product, _unit, State.NEW, _parcelId);
+        attributes[_toTokenId] = Attr(msg.sender, _fromTokenId, _quantity, _product, _unit, State.NEW, _parcelId, _needsProcessing);
         _addTokenToOwnerEnumeration(msg.sender, _toTokenId);
         emit Transaction(msg.sender, _toTokenId, State.NEW);
     }
@@ -144,7 +151,7 @@ contract GreenOrigin is ERC721, Ownable {
             id: parcelCount,
             coordinates: _coordinates,
             owner: msg.sender,
-            compliant: false,
+            compliance: false,
             auditHistory: new string[](0)
         });
         
@@ -160,11 +167,41 @@ contract GreenOrigin is ERC721, Ownable {
         _addTokenToOwnerEnumeration(_to, _tokenId);
     }
 
-    // Función para transferir el token al Processor
+    // Función para transferir el token al Processor desde el farmer
     function transferToProcessor(address _processor, uint256 _tokenId) external userRegistered {
+        require(attributes[_tokenId].needsProcessing, "Este producto no puede pasar por un procesador");
+        require(getUserRole(msg.sender) == Role.Farmer, "No tiene el rol de farmer para realizar esta transaccion");
+        require(getUserRole(_processor) == Role.Processor, "El destinatario no tiene el rol de procesador");
         safeTransferFrom(msg.sender, _processor, _tokenId);
         attributes[_tokenId].state = State.DELIVERED;
         emit Transaction(_processor, _tokenId, State.DELIVERED);
+    }
+    
+    // Función para tranferir el token al exportador desde el Farmer 
+    function farmerTransferToExporter(address _exporter, uint256 _tokenId) external userRegistered {
+        require(!attributes[_tokenId].needsProcessing, "Este producto necesita procesamiento y debe ser transferido al procesador");
+        require(getUserRole(msg.sender) == Role.Farmer, "No tiene el rol de farmer para realizar esta transaccion");
+        require(getUserRole(_exporter) == Role.Exporter, "El destinatario no tiene el rol de exportador");
+        safeTransferFrom(msg.sender, _exporter, _tokenId);
+        attributes[_tokenId].state = State.DELIVERED;
+        emit Transaction(_exporter, _tokenId, State.DELIVERED);
+    }
+
+    // Función para que el procesador tranfiera su token al exportador
+    function ProcessorTransferToExporter(address _exporter, uint256 _tokenId) external userRegistered onlyProcessor {
+        require(getUserRole(msg.sender) == Role.Processor, "No tiene el rol de procesador para enviar la transaccion");
+        require(getUserRole(_exporter) == Role.Exporter, "El destinatario no es exportador");
+        safeTransferFrom(msg.sender, _exporter, _tokenId);
+        attributes[_tokenId].state = State.DELIVERED;
+        emit Transaction(_exporter, _tokenId, State.DELIVERED);
+    }
+
+    function exporterTransferToOperatorEU(address _operadorUE, uint256 _tokenId) external userRegistered {
+        require(getUserRole(msg.sender) == Role.Exporter, "Solo el exportador puede tranferir al operadorUE");
+        require(getUserRole(_operadorUE) == Role.OperatorEU, "El destinatario no el OperadorUE");
+        _safeTransfer(msg.sender, _operadorUE, _tokenId);
+        attributes[_tokenId].state = State.DELIVERED;
+        emit Transaction(_operadorUE, _tokenId, State.DELIVERED);
     }
 
     // Función para aceptar el token
